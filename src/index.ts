@@ -165,6 +165,11 @@ function showConfigInfo(config: TranslationOptions & { config: any }): void {
     ['进度显示', config.config.showProgressBar ? '是' : '否'],
     ['生成报告', config.config.generateReport ? (config.config.reportFormat || 'markdown') : '否'],
     ['递归翻译', config.config.recursiveTranslation ? (config.config.maxRecursiveDepth === 0 ? '无限制' : `最大${config.config.maxRecursiveDepth}层`) : '否'],
+    ['双语对照', config.config.bilingualMode?.enabled ? (
+      `${config.config.bilingualMode.layout === 'parallel' ? '并行' : '顺序'} | ` +
+      `${config.config.bilingualMode.showSourceFirst ? '原文在前' : '译文在前'} | ` +
+      `${config.config.bilingualMode.alignParagraphs ? '段落对齐' : '不对齐'}`
+    ) : '否'],
   ].forEach(([key, value]) => {
     logger.info(`  ${chalk.gray('•')} ${key.padEnd(8)}${chalk.gray('|')} ${value}`);
   });
@@ -207,6 +212,11 @@ program
   .option('--no-progress', '不显示进度条')
   .option('--report [format]', '生成翻译报告')
   .option('--list-languages', '显示支持的语言列表')
+  .option('--bilingual', '启用双语对照翻译')
+  .option('--bilingual-layout <type>', '双语对照布局方式 (parallel/sequential)', 'parallel')
+  .option('--bilingual-separator <separator>', '双语对照分隔符', '\n---\n')
+  .option('--source-first', '原文显示在前（默认译文在前）')
+  .option('--align-paragraphs', '对齐段落')
   .action(async (options) => {
     // 显示标题
     showTitle();
@@ -287,6 +297,17 @@ program
         ...(typeof options.report !== 'undefined' && {
           generateReport: !!options.report,
           ...(options.report && { reportFormat: options.report === true ? 'markdown' : options.report })
+        }),
+
+        // 双语对照翻译设置
+        ...(typeof options.bilingual !== 'undefined' && {
+          bilingualMode: {
+            enabled: options.bilingual,
+            layout: options.bilingualLayout as 'parallel' | 'sequential',
+            separator: options.bilingualSeparator,
+            showSourceFirst: options.sourceFirst || false,
+            alignParagraphs: options.alignParagraphs || false,
+          }
         }),
       };
 
