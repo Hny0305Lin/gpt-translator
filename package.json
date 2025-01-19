@@ -1,0 +1,36 @@
+{
+  "name": "gpt-translator",
+  "version": "1.0.0",
+  "description": "A CLI tool for translating files using GPT-compatible APIs",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "nodemon src/index.ts",
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "keywords": [
+    "translation",
+    "gpt",
+    "cli"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "nodemon": "^3.1.9",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "@types/cli-progress": "^3.11.6",
+    "axios": "^1.6.7",
+    "chalk": "^4.1.2",
+    "cli-progress": "^3.12.0",
+    "commander": "^11.1.0",
+    "dotenv": "^16.4.5",
+    "openai": "^4.79.1",
+    "ora": "^5.4.1",
+    "p-limit": "^3.1.0"
+  }
+}
