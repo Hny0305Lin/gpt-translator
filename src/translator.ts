@@ -89,18 +89,68 @@ export class Translator {
   }
 
   /**
+   * 处理双语对照翻译
+   */
+  private formatBilingualContent(source: string, translation: string): string {
+    const { bilingualMode } = this.config;
+    if (!bilingualMode.enabled) {
+      return translation;
+    }
+
+    const sourceLines = source.split('\n');
+    const translationLines = translation.split('\n');
+
+    if (bilingualMode.layout === 'parallel') {
+      // 并行布局：原文和译文并排显示
+      const maxLines = Math.max(sourceLines.length, translationLines.length);
+      const result: string[] = [];
+
+      for (let i = 0; i < maxLines; i++) {
+        const sourceLine = sourceLines[i] || '';
+        const translationLine = translationLines[i] || '';
+
+        if (bilingualMode.alignParagraphs) {
+          // 如果是空行，保持一致的空行
+          if (!sourceLine.trim() && !translationLine.trim()) {
+            result.push('');
+            continue;
+          }
+        }
+
+        const line = bilingualMode.showSourceFirst
+          ? `${sourceLine}\n${translationLine}`
+          : `${translationLine}\n${sourceLine}`;
+        result.push(line);
+      }
+
+      return result.join('\n');
+    } else {
+      // 顺序布局：原文在前或译文在前
+      return bilingualMode.showSourceFirst
+        ? `${source}${bilingualMode.separator}${translation}`
+        : `${translation}${bilingualMode.separator}${source}`;
+    }
+  }
+
+  /**
    * 生成系统提示词
    */
   private generateSystemPrompt(options: TranslationOptions): string {
-    if (this.config.systemPromptTemplate) {
-      const properNounsPrompt = this.formatProperNouns(options);
-      return this.config.systemPromptTemplate
+    const template = this.config.systemPromptTemplate;
+    const properNounsPrompt = this.formatProperNouns(options);
+    const bilingualPrompt = this.config.bilingualMode.enabled
+      ? '请按照要求提供双语对照翻译，保持原文格式。'
+      : '';
+
+    if (template) {
+      return template
         .replace('{SOURCE_LANG}', LANGUAGE_NAMES[options.languages.source])
         .replace('{TARGET_LANG}', LANGUAGE_NAMES[options.languages.target])
         .replace('{SKIP_PROPER_NOUNS}', options.skipProperNouns ?
           `请仅翻译文本内容，对于专有名词，请按照以下规则处理：\n${properNounsPrompt}` : '')
         .replace('{SKIP_CODE_BLOCKS}', options.skipCodeBlocks ?
-          '请不要翻译代码块、命令行、配置项等技术内容，保持原样。' : '');
+          '请不要翻译代码块、命令行、配置项等技术内容，保持原样。' : '')
+        .replace('{BILINGUAL_MODE}', bilingualPrompt);
     }
 
     return [
@@ -112,6 +162,7 @@ export class Translator {
       '"达"意味着译文应通顺易懂，表达清晰；',
       '"雅"则追求译文的文化审美和语言的优美。',
       '目标是创作出既忠于原作精神，又符合目标语言文化和读者审美的翻译。',
+      '输出尽量输出完整内容，不要省略任何原文内容',
       options.skipProperNouns ? `对于专有名词，请按照以下规则处理：\n${this.formatProperNouns(options)}` : '',
       options.skipCodeBlocks ? '请不要调整代码块、命令行、配置项等技术内容，包括一些 HTML, CSS 等等样式定义，保持原样。' : '',
       '请保持原文的格式和标点符号。',
@@ -175,28 +226,36 @@ export class Translator {
   /**
    * 生成报告
    */
-  private generateReport(results: TranslationResult[]): string {
+  private generateReport(results: TranslationResult[], totalDuration: number): string {
     const now = new Date().toISOString();
     const totalFiles = results.length;
     const totalTokens = results.reduce((sum, r) => sum + r.tokenUsage.inputTokens, 0);
     const totalCost = results.reduce((sum, r) => sum + r.tokenUsage.estimatedCost, 0);
+    const averageSpeed = totalTokens / (totalDuration / 1000);
 
     const report = [
       '# 翻译报告',
       `\n## 基本信息`,
       `- 完成时间：${now}`,
+      `- 总耗时：${this.formatDuration(totalDuration)}`,
       `- 总文件数：${totalFiles}`,
-      `- 总Token数：${totalTokens}`,
+      `- 总Token数：${totalTokens.toLocaleString()}`,
+      `- 平均速度：${Math.round(averageSpeed)} tokens/s`,
       `- 总费用：$${totalCost.toFixed(6)}`,
       '\n## 文件详情',
     ];
 
     results.forEach(result => {
+      const duration = result.duration || 0;
+      const speed = result.tokenUsage.inputTokens / (duration / 1000);
+
       report.push(
         `\n### ${result.sourcePath}`,
         `- 目标文件：${result.targetPath}`,
-        `- 输入Token：${result.tokenUsage.inputTokens}`,
-        `- 输出Token：${result.tokenUsage.estimatedOutputTokens}`,
+        `- 耗时：${this.formatDuration(duration)}`,
+        `- 速度：${Math.round(speed)} tokens/s`,
+        `- 输入Token：${result.tokenUsage.inputTokens.toLocaleString()}`,
+        `- 输出Token：${result.tokenUsage.estimatedOutputTokens.toLocaleString()}`,
         `- 费用：$${result.tokenUsage.estimatedCost.toFixed(6)}`
       );
     });
@@ -406,6 +465,9 @@ export class Translator {
     options: TranslationOptions,
     progressBar?: SingleBar | null
   ): Promise<TranslationResult> {
+    const startTime = Date.now();
+    let content = '';
+
     try {
       if (!this.isFileSupported(sourcePath)) {
         throw new APIError(
@@ -419,7 +481,10 @@ export class Translator {
       this.checkFileSize(sourcePath);
 
       // 读取文件内容
-      const content = await this.readFileContent(sourcePath);
+      if (progressBar) {
+        this.progressManager.updateStatus(progressBar, '读取文件...');
+      }
+      content = await this.readFileContent(sourcePath);
 
       // 如果文件为空且配置了忽略空文件
       if (content.trim().length === 0 && this.config.ignoreEmptyFiles) {
@@ -432,6 +497,9 @@ export class Translator {
 
       // 如果未指定源语言，尝试自动检测
       if (!options.languages.source) {
+        if (progressBar) {
+          this.progressManager.updateStatus(progressBar, '检测语言...');
+        }
         options.languages.source = await this.detectLanguage(content);
         logger.info(`检测到源语言：${LANGUAGE_NAMES[options.languages.source]}`);
       }
@@ -471,15 +539,18 @@ export class Translator {
 
       let translatedContent = '';
       let progress = 0;
+      let lastProgressUpdate = Date.now();
+      const progressUpdateInterval = 100; // 每100ms更新一次进度
 
       for await (const chunk of stream) {
         const content = chunk.choices[0]?.delta?.content || '';
         translatedContent += content;
 
-        // 更新进度条
-        if (progressBar) {
+        // 更新进度条，但限制更新频率
+        if (progressBar && Date.now() - lastProgressUpdate >= progressUpdateInterval) {
           progress = Math.min(progress + content.length / tokenCount * 100, 99);
           this.progressManager.updateProgress(progressBar, progress, '翻译中...');
+          lastProgressUpdate = Date.now();
         }
       }
 
@@ -492,15 +563,21 @@ export class Translator {
         finalContent += metadata;
       }
 
-      // 如果需要保留原文
-      if (this.config.keepOriginalContent) {
+      // 处理双语对照翻译
+      const processedContent = this.formatBilingualContent(content, translatedContent);
+
+      // 如果需要保留原文且未启用双语对照
+      if (this.config.keepOriginalContent && !this.config.bilingualMode.enabled) {
         finalContent += content + this.config.contentSeparator;
       }
 
       // 添加翻译内容
-      finalContent += translatedContent;
+      finalContent += processedContent;
 
       // 写入文件
+      if (progressBar) {
+        this.progressManager.updateProgress(progressBar, 99, '保存文件...');
+      }
       await this.writeFileContent(targetPath, finalContent);
 
       if (progressBar) {
@@ -515,6 +592,9 @@ export class Translator {
         targetPath = newPath;
       }
 
+      const endTime = Date.now();
+      const duration = endTime - startTime;
+
       return {
         sourcePath,
         targetPath,
@@ -523,6 +603,7 @@ export class Translator {
           estimatedOutputTokens: Math.ceil(tokenCount * 1.3),
           estimatedCost,
         },
+        duration,
       };
     } catch (error) {
       if (progressBar) {
@@ -620,10 +701,28 @@ export class Translator {
   }
 
   /**
+   * 格式化持续时间
+   */
+  private formatDuration(ms: number): string {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+
+    if (hours > 0) {
+      return `${hours}h${minutes % 60}m${seconds % 60}s`;
+    } else if (minutes > 0) {
+      return `${minutes}m${seconds % 60}s`;
+    } else {
+      return `${seconds}s`;
+    }
+  }
+
+  /**
    * 翻译文件或目录
    */
   public async translate(options: TranslationOptions): Promise<TranslationResult[]> {
     const { input } = options;
+    const startTime = Date.now();
 
     try {
       const stats = fs.statSync(input);
@@ -642,37 +741,50 @@ export class Translator {
         }
 
         // 创建总进度条
-        const totalBar = this.progressManager.createBar('总进度', files.length);
+        const totalBar = this.progressManager.createBar('总进度', 100, '总计');
         let completedFiles = 0;
+        let totalTokens = 0;
+        let totalCost = 0;
 
         // 将所有文件添加到任务队列
         const promises = files.map((filePath, index) => {
           // 计算相对路径，用于在输出目录中保持相同的目录结构
           const relativePath = path.relative(input, filePath);
           const targetPath = path.join(options.output, relativePath);
-          const fileBar = this.progressManager.createBar(`文件 ${index + 1}/${files.length}`, 100);
+          const fileBar = this.progressManager.createBar(
+            `文件 ${index + 1}/${files.length}`,
+            100,
+            path.basename(filePath)
+          );
 
           // 根据文件大小设置优先级（小文件优先）
           const stats = fs.statSync(filePath);
-          const priority = Math.max(0, 1000 - Math.floor(stats.size / 1024)); // 越小优先级越高
+          const priority = Math.max(0, 1000 - Math.floor(stats.size / 1024));
 
           return this.addTask(priority, async () => {
             try {
               // 确保目标目录存在
               ensureDir(path.dirname(targetPath));
               const result = await this.translateFile(filePath, targetPath, options, fileBar);
+
               completedFiles++;
+              totalTokens += result.tokenUsage.inputTokens;
+              totalCost += result.tokenUsage.estimatedCost;
+
               if (totalBar) {
-                this.progressManager.updateProgress(totalBar, completedFiles, `已完成 ${completedFiles}/${files.length}`);
+                this.progressManager.updateTotalProgress(totalBar, completedFiles, files.length);
               }
+
               return result;
             } catch (error) {
               logger.error(`翻译失败：${relativePath}`);
               logger.error(error instanceof Error ? error.message : String(error));
+
               completedFiles++;
               if (totalBar) {
-                this.progressManager.updateProgress(totalBar, completedFiles, `已完成 ${completedFiles}/${files.length} (含错误)`);
+                this.progressManager.updateTotalProgress(totalBar, completedFiles, files.length);
               }
+
               throw error;
             }
           });
@@ -680,6 +792,8 @@ export class Translator {
 
         // 处理任务队列
         const results = await this.processTasks(options.concurrency);
+        const endTime = Date.now();
+
         this.progressManager.stop();
 
         // 过滤掉失败的结果
@@ -688,7 +802,10 @@ export class Translator {
         // 生成报告
         if (this.config.generateReport) {
           const reportPath = path.join(options.output, 'translation-report.md');
-          await fs.promises.writeFile(reportPath, this.generateReport(validResults));
+          await fs.promises.writeFile(
+            reportPath,
+            this.generateReport(validResults, endTime - startTime)
+          );
         }
 
         // 打开输出目录
@@ -697,8 +814,10 @@ export class Translator {
         return validResults;
       } else {
         const targetPath = generateTargetPath(input, options.output);
-        const fileBar = this.progressManager.createBar('翻译进度', 100);
+        const fileBar = this.progressManager.createBar('翻译进度', 100, path.basename(input));
         const result = await this.translateFile(input, targetPath, options, fileBar);
+        const endTime = Date.now();
+
         this.progressManager.stop();
 
         const results = [result];
@@ -706,7 +825,10 @@ export class Translator {
         // 生成报告
         if (this.config.generateReport) {
           const reportPath = path.join(options.output, 'translation-report.md');
-          await fs.promises.writeFile(reportPath, this.generateReport(results));
+          await fs.promises.writeFile(
+            reportPath,
+            this.generateReport(results, endTime - startTime)
+          );
         }
 
         // 打开输出目录

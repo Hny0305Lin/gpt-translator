@@ -107,6 +107,19 @@ export interface Config {
     /** 是否区分大小写 */
     caseSensitive: boolean;
   };
+  /** 双语对照翻译配置 */
+  bilingualMode: {
+    /** 是否启用双语对照模式 */
+    enabled: boolean;
+    /** 双语对照布局方式 */
+    layout: 'parallel' | 'sequential';
+    /** 原文与译文之间的分隔符 */
+    separator: string;
+    /** 是否在译文前显示原文 */
+    showSourceFirst: boolean;
+    /** 是否对齐段落 */
+    alignParagraphs: boolean;
+  };
 }
 
 export interface TokenUsage {
@@ -119,6 +132,8 @@ export interface TranslationResult {
   sourcePath: string;
   targetPath: string;
   tokenUsage: TokenUsage;
+  /** 翻译耗时（毫秒） */
+  duration: number;
 }
 
 export interface LanguageMapping {
